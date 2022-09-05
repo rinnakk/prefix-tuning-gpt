@@ -4,7 +4,7 @@
 
 This repository demonstrates how to conduct [prefix-tuning](https://arxiv.org/abs/2101.00190) with GPT/[GPT-NeoX](https://github.com/EleutherAI/gpt-neox) models and to do inference with trained prefix weights.
 
-The example training code `src/prefix_tuning_example.py` trains prefix-tuning weights that encourage a GPT/GPT-NeoX model to end every generated sentence with a smiling face emoji 😃. 100 documents from [Japanese CC-100](http://data.statmt.org/cc-100/ja.txt.xz) are used as sample data for training/validation, and the data is placed at `data/sample_data.jsonl`.
+The example training code `src/prefix_tuning_example.py` trains prefix-tuning weights that encourage a GPT/GPT-NeoX model to end every generated sentence with a smiling face emoji 😃. 100 documents from [Japanese CC-100](http://data.statmt.org/cc-100) are used as sample data for training/validation, and the data is placed at `data/sample_data.jsonl`.
 
 The code has been verified on [rinna/japanese-gpt-neox-small](https://huggingface.co/rinna/japanese-gpt-neox-small). The trained weights has been released in [the same model hub page](https://huggingface.co/rinna/japanese-gpt-neox-small).
 
@@ -14,6 +14,7 @@ The code has been verified on [rinna/japanese-gpt-neox-small](https://huggingfac
 |-|
 | [Update log](#update-log) |
 | [Use example](#use-example) |
+| [Research repos by rinna](#research-repos-by-rinna) |
 | [License](#license) |
 
 ---
@@ -83,6 +84,16 @@ The code has been verified on [rinna/japanese-gpt-neox-small](https://huggingfac
     > 1. ※海外ブランド品の場合は、返品・返金等はお受け致しかねますので予めご了承願います。 ※ 商品発送後、お客様へ商品返送完了までのスピードを重視する方は海外ブランド品を先に送り付けさせて頂く ケースがございます。 😃
     > 2. 私は過去に持っていた不動産を、中古住宅として売却していましたが、その後の私の状況はどうだったのでしょうか? 😃 結果としては、投資物件として売却を考えていますが、今までの相場も読んでいただけばわかると思います。 😃 今まで、物件に対しての投資は非常に控えめにしてきたのですが、今回の提案を読んで、実際に物件を購入する際にはきちんと確認をしようと思います。 😃
     > 3. この写真集の表紙をこの台紙にしている作家さんは、まるで誰かの指示を受けて行動している人物のように見える、というのが、この作品をやぶにらんだ「殺し屋集団」の描いている作品であるように思 います。 😃
+
+---
+
+## Research repos by rinna
+
+| Link to repo |
+|-|
+| [japanese-pretrained-models](https://github.com/rinnakk/japanese-pretrained-models) |
+| [japanese-clip](https://github.com/rinnakk/japanese-clip) |
+| [prefix-tuning-gpt](https://github.com/rinnakk/prefix-tuning-gpt) |
 
 ---
 
