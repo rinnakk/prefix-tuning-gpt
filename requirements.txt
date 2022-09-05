@@ -1,0 +1,7 @@
+torch
+transformers
+numpy
+deepspeed
+tqdm
+tensorboard
+sentencepiece
