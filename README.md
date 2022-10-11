@@ -21,6 +21,7 @@ The code has been verified on [rinna/japanese-gpt-neox-small](https://huggingfac
 
 ## Update log
 
+* 2022/10/11 Use prefix wrapper to allow for applying deepspeed to both a base model and a prefix encoder.
 * 2022/09/05 Release.
 
 ---

@@ -38,7 +38,7 @@ from deepspeed.ops.adam import FusedAdam as Adam
 from data_source import DataSource, collate_fn
 from model.gpt_neox.modeling_gpt_neox import GPTNeoXForCausalLM
 from model.gpt.modeling_gpt2 import GPT2LMHeadModel
-from model.prompt.prefix_tuning import PrefixEncoder
+from model.prompt.prefix_tuning import PrefixEncoder, PrefixWrapper
 from util import StatisticsReporter, get_linear_schedule_with_warmup, print_rank_0, is_rank_0, count_parameters
 
 
@@ -260,13 +260,13 @@ def training(local_rank, config):
     # build model
     print_rank_0("Building model...")
     if config.model_type == "gpt":
-        model = GPT2LMHeadModel.from_pretrained(config.pretrained_model_dir)
+        base_model = GPT2LMHeadModel.from_pretrained(config.pretrained_model_dir)
     elif config.model_type == "gpt-neox":
-        model = GPTNeoXForCausalLM.from_pretrained(config.pretrained_model_dir)
-    model = model.to(DEVICE)
+        base_model = GPTNeoXForCausalLM.from_pretrained(config.pretrained_model_dir)
+    base_model = base_model.to(DEVICE)
 
     # freeze model parameters
-    for param in model.parameters():
+    for param in base_model.parameters():
         param.requires_grad = False
     
     # build prefix-tuning model
@@ -288,14 +288,14 @@ def training(local_rank, config):
         config.prefix_seq_len,
         config.prefix_input_dim,
         config.prefix_hidden_dim,
-        model.config.n_embd,
-        model.config.n_layer,
-        model.config.n_head
+        base_model.config.n_embd,
+        base_model.config.n_layer,
+        base_model.config.n_head
     )
     prefix_encoder = PrefixEncoder(prefix_config)
     prefix_encoder = prefix_encoder.to(DEVICE)
 
-    print_rank_0(f"Trainable backbone model parameters: {count_parameters(model)}")
+    print_rank_0(f"Trainable backbone model parameters: {count_parameters(base_model)}")
     print_rank_0(f"Trainable prefix encoder parameters: {count_parameters(prefix_encoder)}")
 
     # load prefix encoder from checkpoint
@@ -310,7 +310,7 @@ def training(local_rank, config):
         init_prefix(
             local_rank,
             config,
-            model,
+            base_model,
             prefix_config,
             prefix_encoder,
             DEVICE,
@@ -319,6 +319,8 @@ def training(local_rank, config):
             weight_decay=0.01
         )
 
+    model = PrefixWrapper(base_model, prefix_encoder)
+
     # non-deepspeed
     if not config.deepspeed:
         # use mixed precision
@@ -326,14 +328,14 @@ def training(local_rank, config):
 
         # use multi gpus
         if config.world_size > 1:
-            prefix_encoder = DDP(
-                prefix_encoder,
+            model = DDP(
+                model,
                 device_ids=[local_rank]
             )
 
     # build optimizer
     print_rank_0("Building optimizer...")
-    param_optimizer = list(prefix_encoder.named_parameters())
+    param_optimizer = list(model.prefix_encoder.named_parameters())
     no_decay = ['bias', "ln", 'LayerNorm']   # no decay for bias and LayerNorm (ln)
     optimizer_grouped_parameters = [
         {
@@ -372,8 +374,8 @@ def training(local_rank, config):
     # deepspeed
     if config.deepspeed:
         print_rank_0("Initializing deepspeed...")
-        prefix_encoder, optimizer, _, lr_scheduler = deepspeed.initialize(
-            model=prefix_encoder,
+        model, optimizer, _, lr_scheduler = deepspeed.initialize(
+            model=model,
             optimizer=optimizer,
             args=config,
             lr_scheduler=lr_scheduler,
@@ -434,13 +436,13 @@ def training(local_rank, config):
                     break
 
                 # forward
-                model.eval()
+                base_model.eval()
                 prefix_encoder.train()
                 if config.deepspeed:
-                    loss, ppl = forward_step(model, prefix_encoder, tokenizer, batch_data)
+                    loss, ppl = forward_step(base_model, prefix_encoder, tokenizer, batch_data)
                 else:
                     with amp.autocast():
-                        loss, ppl = forward_step(model, prefix_encoder, tokenizer, batch_data)
+                        loss, ppl = forward_step(base_model, prefix_encoder, tokenizer, batch_data)
 
                 # update statisitcs
                 trn_reporter.update_data({
@@ -450,14 +452,14 @@ def training(local_rank, config):
 
                 # backward
                 if config.deepspeed:
-                    prefix_encoder.backward(loss)
+                    model.backward(loss)
                 else:
                     scaler.scale(loss).backward()
                 del loss
 
                 # update model parameters (deepspeed)
                 if config.deepspeed:
-                    prefix_encoder.step()
+                    model.step()
 
             # update model parameters (non-deepspeed)
             if not config.deepspeed:
@@ -496,20 +498,12 @@ def training(local_rank, config):
             
             # forward
             with torch.no_grad():
-                model.eval()
+                base_model.eval()
                 prefix_encoder.eval()
-                
-                # use only 1 gpu for evaluation in multi-gpu situation
-                if config.world_size > 1:
-                    eval_model = model
-                    eval_prefix_encoder = prefix_encoder.module
-                else:
-                    eval_model = model
-                    eval_prefix_encoder = prefix_encoder
 
                 for eval_batch_idx, eval_batch_data in enumerate(dev_dataloader):
                     with amp.autocast():
-                        loss, ppl = forward_step(eval_model, eval_prefix_encoder, tokenizer, eval_batch_data)
+                        loss, ppl = forward_step(base_model, prefix_encoder, tokenizer, eval_batch_data)
 
                     dev_reporter.update_data({"monitor": loss.item(), "ppl": ppl.item()})
 
@@ -525,7 +519,7 @@ def training(local_rank, config):
                 os.makedirs(f"../data/model", exist_ok=True)
 
                 prefix_encoder.eval()
-                model_to_save = prefix_encoder.module if hasattr(prefix_encoder, 'module') else prefix_encoder
+                model_to_save = prefix_encoder
                 weights = model_to_save.prefix_mlp(model_to_save.prefix_wte.weight)
 
                 checkpoint = weights
