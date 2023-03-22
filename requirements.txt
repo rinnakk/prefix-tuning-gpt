@@ -1,5 +1,5 @@
 torch
-transformers
+transformers>=4.27.2
 numpy
 deepspeed
 tqdm

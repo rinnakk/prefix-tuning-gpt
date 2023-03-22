@@ -16,7 +16,7 @@
 
 import argparse
 
-from transformers import T5Tokenizer
+from transformers import AutoTokenizer
 import torch
 
 from util import step_decode, generate_causal_mask
@@ -114,12 +114,17 @@ def inference(config):
 
     # build model and tokenizer
     print("Building model...")
+    tokenizer = AutoTokenizer.from_pretrained(config.pretrained_model_dir, use_fast=False)
     if config.model_type == "gpt":
-        tokenizer = T5Tokenizer.from_pretrained(config.pretrained_model_dir)
         model = GPT2LMHeadModel.from_pretrained(config.pretrained_model_dir)
+        model_n_embd = model.config.n_embd
+        model_n_layer = model.config.n_layer
+        model_n_head = model.config.n_head
     elif config.model_type == "gpt-neox":
-        tokenizer = T5Tokenizer.from_pretrained(config.pretrained_model_dir)
         model = GPTNeoXForCausalLM.from_pretrained(config.pretrained_model_dir)
+        model_n_embd = model.config.hidden_size
+        model_n_layer = model.config.num_hidden_layers
+        model_n_head = model.config.num_attention_heads
     model = model.eval()
     model = model.to(DEVICE)
 
@@ -132,9 +137,9 @@ def inference(config):
         )
         prefix_weights = prefix_weights.view(
             config.prefix_seq_len,
-            model.config.n_layer*2,
-            model.config.n_head,
-            model.config.n_embd // model.config.n_head
+            model_n_layer*2,
+            model_n_head,
+            model_n_embd // model_n_head
         ).to(DEVICE)
         prefix_seq_len = prefix_weights.size(0)
     else:

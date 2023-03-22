@@ -38,7 +38,7 @@ from deepspeed.ops.adam import FusedAdam as Adam
 from data_source import DataSource, collate_fn
 from model.gpt_neox.modeling_gpt_neox import GPTNeoXForCausalLM
 from model.gpt.modeling_gpt2 import GPT2LMHeadModel
-from model.prompt.prefix_tuning import PrefixEncoder, PrefixWrapper
+from model.prompt.prefix_tuning import PrefixEncoder, PrefixWrapper, init_prefix
 from util import StatisticsReporter, get_linear_schedule_with_warmup, print_rank_0, is_rank_0, count_parameters
 
 
@@ -63,66 +63,6 @@ def load_data_from_filepath(filepath, tokenizer, max_seq_len=64):
                 else:
                     tmp_text = new_tmp_text
         return data
-
-
-def init_prefix(local_rank, config, model, prefix_config, prefix_encoder, device, n_epochs=50, learning_rate=0.0001, weight_decay=0.01):
-    if config.world_size > 1:
-        to_train_prefix_encoder = DDP(
-            prefix_encoder,
-            device_ids=[local_rank]
-        )
-    else:
-        to_train_prefix_encoder = prefix_encoder
-
-    token_ids = list(range(prefix_config.prefix_seq_len))
-    token_ids = torch.LongTensor(token_ids).to(device)
-    
-    labels = []
-    with torch.no_grad():
-        outputs = model.forward(input_ids=token_ids, return_dict=True, use_cache=True)
-        past_key_values = outputs.past_key_values
-        for p in past_key_values:
-            labels.append(torch.stack(p))
-        labels = torch.cat(tuple(labels), dim=0)
-    labels = labels.to(device)
-
-    param_optimizer = list(to_train_prefix_encoder.named_parameters())
-    no_decay = ["bias"]  # no decay for bias
-    optimizer_grouped_parameters = [
-        {
-            "params": [
-                p for n, p in param_optimizer if not any(nd in n for nd in no_decay)
-            ],
-            "weight_decay": weight_decay,
-        },
-        {
-            "params": [
-                p for n, p in param_optimizer if any(nd in n for nd in no_decay)
-            ],
-            "weight_decay": 0.0,
-        },
-    ]
-    optimizer_prefix = torch.optim.AdamW(
-        optimizer_grouped_parameters,
-        lr=learning_rate,
-        weight_decay=weight_decay,
-    )
-    
-    to_train_prefix_encoder.train()
-    tqdm_bar = tqdm(range(n_epochs), desc="Epoch")
-    for _ in tqdm_bar:
-        optimizer_prefix.zero_grad()
-
-        prompt_outputs = to_train_prefix_encoder.forward(
-            batch_size=1, device=device
-        )
-        prompt_outputs = torch.cat(prompt_outputs, dim=0)
-
-        loss_metrics = torch.nn.MSELoss()
-        loss = loss_metrics(prompt_outputs, labels)
-        tqdm_bar.desc = "Epoch loss: {:.2e}".format(loss.item())
-        loss.backward()
-        optimizer_prefix.step()
 
 
 def forward_step(model, prefix_encoder, tokenizer, batch_data):
@@ -261,8 +201,14 @@ def training(local_rank, config):
     print_rank_0("Building model...")
     if config.model_type == "gpt":
         base_model = GPT2LMHeadModel.from_pretrained(config.pretrained_model_dir)
+        base_model_n_embd = base_model.config.n_embd
+        base_model_n_layer = base_model.config.n_layer
+        base_model_n_head = base_model.config.n_head
     elif config.model_type == "gpt-neox":
         base_model = GPTNeoXForCausalLM.from_pretrained(config.pretrained_model_dir)
+        base_model_n_embd = base_model.config.hidden_size
+        base_model_n_layer = base_model.config.num_hidden_layers
+        base_model_n_head = base_model.config.num_attention_heads
     base_model = base_model.to(DEVICE)
 
     # freeze model parameters
@@ -288,9 +234,9 @@ def training(local_rank, config):
         config.prefix_seq_len,
         config.prefix_input_dim,
         config.prefix_hidden_dim,
-        base_model.config.n_embd,
-        base_model.config.n_layer,
-        base_model.config.n_head
+        base_model_n_embd,
+        base_model_n_layer,
+        base_model_n_head
     )
     prefix_encoder = PrefixEncoder(prefix_config)
     prefix_encoder = prefix_encoder.to(DEVICE)

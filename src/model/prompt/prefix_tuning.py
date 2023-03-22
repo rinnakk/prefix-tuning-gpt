@@ -16,6 +16,7 @@ from typing import List, Union
 
 import torch
 import torch.nn as nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 class PrefixWrapper(nn.Module):
@@ -76,3 +77,61 @@ class PrefixEncoder(nn.Module):
         # Transpose -> [match_n_layer*2, batch_size, match_n_head, prefix_seq_len, match_n_embd]
         past_key_values = past_key_values.permute([2, 0, 3, 1, 4]).split(2)
         return past_key_values
+
+
+def init_prefix(local_rank, config, model, prefix_config, prefix_encoder, device, n_epochs=50, learning_rate=0.0001, weight_decay=0.01):
+    if config.world_size > 1:
+        to_train_prefix_encoder = DDP(
+            prefix_encoder,
+            device_ids=[local_rank]
+        )
+    else:
+        to_train_prefix_encoder = prefix_encoder
+
+    token_ids = [list(range(prefix_config.prefix_seq_len))]
+    token_ids = torch.LongTensor(token_ids).to(device)
+    
+    labels = []
+    with torch.no_grad():
+        outputs = model.forward(input_ids=token_ids, return_dict=True, use_cache=True)
+        past_key_values = outputs.past_key_values
+        for p in past_key_values:
+            labels.append(torch.stack(p))
+        labels = torch.cat(tuple(labels), dim=0)
+    labels = labels.to(device)
+
+    param_optimizer = list(to_train_prefix_encoder.named_parameters())
+    no_decay = ["bias"]  # no decay for bias
+    optimizer_grouped_parameters = [
+        {
+            "params": [
+                p for n, p in param_optimizer if not any(nd in n for nd in no_decay)
+            ],
+            "weight_decay": weight_decay,
+        },
+        {
+            "params": [
+                p for n, p in param_optimizer if any(nd in n for nd in no_decay)
+            ],
+            "weight_decay": 0.0,
+        },
+    ]
+    optimizer_prefix = torch.optim.AdamW(
+        optimizer_grouped_parameters,
+        lr=learning_rate,
+        weight_decay=weight_decay,
+    )
+    
+    to_train_prefix_encoder.train()
+    for _ in range(n_epochs):
+        optimizer_prefix.zero_grad()
+
+        prompt_outputs = to_train_prefix_encoder.forward(
+            batch_size=1, device=device
+        )
+        prompt_outputs = torch.cat(prompt_outputs, dim=0)
+
+        loss_metrics = torch.nn.MSELoss()
+        loss = loss_metrics(prompt_outputs, labels)
+        loss.backward()
+        optimizer_prefix.step()
